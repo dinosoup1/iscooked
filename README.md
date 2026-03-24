@@ -87,4 +87,4 @@ MIT — do whatever you want with it.
 
 ---
 
-Built by a cybersecurity engineer who runs local LLMs. [iscooked.com](https://iscooked.com)
+Built by a cybersecurity engineer who runs local LLMs. [GitHub](https://github.com/dinosoup1/iscooked) | [iscooked.com](https://iscooked.com)
