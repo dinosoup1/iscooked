@@ -6,32 +6,21 @@
     <title>iscooked.com — Am I Cooked? Local AI Security Scanner</title>
     <meta name="description" content="Scan your local AI setup for security and privacy risks. One command to find out if your Ollama, LM Studio, or self-hosted LLM setup is cooked.">
 
-    <!-- OG Meta Tags -->
-    <meta property="og:title" content="iscooked.com — Am I Cooked?">
-    <meta property="og:description" content="One command to scan your local AI setup for security and privacy risks. Ollama, LM Studio, text-gen-webui, and more.">
-    <meta property="og:image" content="https://iscooked.com/og-image.png">
+    <!-- Open Graph / Social -->
+    <meta property="og:type" content="website">
     <meta property="og:url" content="https://iscooked.com">
+    <meta property="og:title" content="iscooked.com — Am I Cooked?">
+    <meta property="og:description" content="One-command local AI security scanner. Find out if your Ollama, LM Studio, or self-hosted LLM setup is leaking like a sieve.">
+    <meta property="og:image" content="https://iscooked.com/og-image.svg">
+
+    <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://iscooked.com">
+    <meta name="twitter:title" content="iscooked.com — Am I Cooked?">
+    <meta name="twitter:description" content="One-command local AI security scanner. Find out if your Ollama, LM Studio, or self-hosted LLM setup is leaking like a sieve.">
+    <meta name="twitter:image" content="https://iscooked.com/og-image.svg">
 
-    <!-- JSON-LD Structured Data -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "iscooked",
-      "description": "One-command security scanner for local AI setups. Checks Ollama, LM Studio, and self-hosted LLMs for security risks.",
-      "url": "https://iscooked.com",
-      "applicationCategory": "SecurityApplication",
-      "operatingSystem": "Linux, macOS",
-      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-      "author": { "@type": "Person", "name": "dinosoup1", "url": "https://github.com/dinosoup1" },
-      "license": "https://opensource.org/licenses/MIT",
-      "softwareVersion": "1.0.0",
-      "programmingLanguage": "Bash"
-    }
-    </script>
-
-    <!-- Emoji Favicon -->
+    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
 
     <style>
@@ -50,8 +39,6 @@
             --cyan: #00ccff;
             --magenta: #cc66ff;
         }
-
-        html { scroll-behavior: smooth; }
 
         body {
             font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
@@ -157,7 +144,7 @@
             margin-bottom: 60px;
         }
 
-        /* ─── Section Titles ─── */
+        /* ─── Checks Grid ─── */
         .section-title {
             font-size: 14px;
             text-transform: uppercase;
@@ -166,8 +153,6 @@
             text-align: center;
             margin-bottom: 32px;
         }
-
-        /* ─── Checks Grid ─── */
         .checks-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -190,48 +175,6 @@
             font-size: 14px;
         }
         .check-desc {
-            font-size: 13px;
-            color: var(--text-dim);
-            line-height: 1.5;
-        }
-
-        /* ─── How It Works ─── */
-        .how-it-works {
-            padding: 0 0 80px;
-        }
-        .steps-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 24px;
-            max-width: 750px;
-            margin: 0 auto;
-        }
-        .step-card {
-            text-align: center;
-            padding: 32px 20px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-        }
-        .step-number {
-            display: inline-block;
-            width: 36px;
-            height: 36px;
-            line-height: 36px;
-            border-radius: 50%;
-            background: var(--green);
-            color: #000;
-            font-weight: 700;
-            font-size: 16px;
-            margin-bottom: 16px;
-        }
-        .step-title {
-            font-weight: 600;
-            color: #fff;
-            margin-bottom: 8px;
-            font-size: 15px;
-        }
-        .step-desc {
             font-size: 13px;
             color: var(--text-dim);
             line-height: 1.5;
@@ -283,48 +226,6 @@
         .t-dim { color: #555; }
         .t-bold { font-weight: 700; }
         .t-white { color: #fff; }
-
-        /* ─── Scoring Section ─── */
-        .scoring-section {
-            padding: 0 0 80px;
-        }
-        .scoring-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        .score-card {
-            background: var(--surface);
-            border-radius: 8px;
-            padding: 24px 20px;
-            text-align: center;
-            border-left: 4px solid;
-        }
-        .score-card.fresh { border-left-color: var(--green); }
-        .score-card.warm { border-left-color: var(--cyan); }
-        .score-card.medium { border-left-color: var(--yellow); }
-        .score-card.cooked { border-left-color: var(--red); }
-        .score-range {
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-bottom: 8px;
-        }
-        .score-label {
-            font-weight: 700;
-            font-size: 16px;
-            margin-bottom: 6px;
-        }
-        .score-card.fresh .score-label { color: var(--green); }
-        .score-card.warm .score-label { color: var(--cyan); }
-        .score-card.medium .score-label { color: var(--yellow); }
-        .score-card.cooked .score-label { color: var(--red); }
-        .score-detail {
-            font-size: 12px;
-            color: var(--text-dim);
-            line-height: 1.5;
-        }
 
         /* ─── CTA ─── */
         .cta-section {
@@ -386,8 +287,6 @@
             .install-box { flex-direction: column; text-align: center; }
             .install-cmd { text-align: center; }
             .checks-grid { grid-template-columns: 1fr; }
-            .steps-grid { grid-template-columns: 1fr; }
-            .scoring-grid { grid-template-columns: 1fr 1fr; }
             .nav-links a { margin-left: 16px; font-size: 13px; }
         }
     </style>
@@ -398,9 +297,8 @@
             <div class="logo">iscooked.com</div>
             <div class="nav-links">
                 <a href="#checks">Checks</a>
-                <a href="#how-it-works">How it works</a>
                 <a href="#demo">Demo</a>
-                <a href="https://github.com/dinosoup1/iscooked" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a href="https://github.com/dinosoup1/iscooked">GitHub</a>
             </div>
         </div>
     </nav>
@@ -488,29 +386,6 @@
         </div>
     </section>
 
-    <section id="how-it-works" class="how-it-works">
-        <div class="container">
-            <p class="section-title">How it works</p>
-            <div class="steps-grid">
-                <div class="step-card">
-                    <div class="step-number">1</div>
-                    <div class="step-title">Run the command</div>
-                    <div class="step-desc">One curl command. No install, no dependencies, no sign-up.</div>
-                </div>
-                <div class="step-card">
-                    <div class="step-number">2</div>
-                    <div class="step-title">Get your score</div>
-                    <div class="step-desc">12 security checks run locally and give you a cooked score from 0–100%.</div>
-                </div>
-                <div class="step-card">
-                    <div class="step-number">3</div>
-                    <div class="step-title">Fix what's cooked</div>
-                    <div class="step-desc">Each issue is flagged with severity so you know exactly what to fix first.</div>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <section id="demo" class="terminal-section">
         <div class="container">
             <p class="section-title">Example output</p>
@@ -557,46 +432,11 @@
         </div>
     </section>
 
-    <section id="scoring" class="scoring-section">
-        <div class="container">
-            <p class="section-title">Scoring</p>
-            <div class="scoring-grid">
-                <div class="score-card fresh">
-                    <div class="score-range">0 – 14%</div>
-                    <div class="score-label">Looking Fresh</div>
-                    <div class="score-detail">Your setup is locked down. Nice work.</div>
-                </div>
-                <div class="score-card warm">
-                    <div class="score-range">15 – 39%</div>
-                    <div class="score-label">Slightly Warm</div>
-                    <div class="score-detail">A few things to tighten up.</div>
-                </div>
-                <div class="score-card medium">
-                    <div class="score-range">40 – 69%</div>
-                    <div class="score-label">Medium Rare</div>
-                    <div class="score-detail">Time to address those warnings.</div>
-                </div>
-                <div class="score-card cooked">
-                    <div class="score-range">70 – 100%</div>
-                    <div class="score-label">Fully Cooked</div>
-                    <div class="score-detail">Fix the critical issues now.</div>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <section class="cta-section">
         <div class="container">
             <h2>Find out if you're cooked</h2>
             <p>Takes 5 seconds. No install. No dependencies. No data leaves your machine.</p>
-            <a href="https://github.com/dinosoup1/iscooked" class="cta-btn" target="_blank" rel="noopener noreferrer">View on GitHub</a>
-        </div>
-    </section>
-
-    <section class="see-also-section">
-        <div class="container" style="text-align: center; padding: 40px 0;">
-            <p style="font-size: 15px; color: var(--text-dim); margin-bottom: 6px;">Running local LLMs?</p>
-            <p style="margin-bottom: 12px;"><a href="https://llmscout.fit" target="_blank" rel="noopener noreferrer" style="color: var(--green); font-size: 14px;">Find the best models for your hardware &rarr; llmscout.fit</a></p>
+            <a href="https://github.com/dinosoup1/iscooked" class="cta-btn">View on GitHub</a>
         </div>
     </section>
 
@@ -604,7 +444,7 @@
         <div class="container">
             <p class="credibility">Built by a cybersecurity engineer who runs local LLMs.</p>
             <div class="footer-links">
-                <a href="https://github.com/dinosoup1/iscooked" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a href="https://github.com/dinosoup1/iscooked">GitHub</a>
                 <a href="#checks">What it checks</a>
             </div>
             <p class="footer-note">iscooked.com runs entirely on your machine. It sends no data anywhere. MIT License.</p>

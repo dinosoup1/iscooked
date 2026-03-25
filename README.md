@@ -1,28 +1,17 @@
 # 🔥 iscooked.com — Am I Cooked?
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-![Bash](https://img.shields.io/badge/bash-3.2%2B-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)
-
-**One-command security scanner for local AI setups.** Find out if your Ollama, LM Studio, or self-hosted LLM is leaking like a sieve.
+**Local AI security scanner.** One command to find out if your Ollama, LM Studio, or self-hosted LLM setup is leaking like a sieve.
 
 ```bash
 curl -fsSL iscooked.com/iscooked.com | bash
 ```
 
-## Quick Start
+Or download and run manually:
 
 ```bash
-# Option 1: Run directly
-curl -fsSL iscooked.com/iscooked.com | bash
-
-# Option 2: Download first
 wget https://iscooked.com/iscooked.com
 chmod +x iscooked.com
 ./iscooked.com
-
-# Option 3: With sudo for deeper checks
-curl -fsSL iscooked.com/iscooked.com | sudo bash
 ```
 
 ## What it checks
@@ -41,21 +30,6 @@ curl -fsSL iscooked.com/iscooked.com | sudo bash
 | **Sensitive Files** | .env files with API keys readable by other users |
 | **History & Logs** | API keys leaked in shell history, world-readable log dirs |
 | **Ollama Config** | OLLAMA_HOST, OLLAMA_ORIGINS, systemd service checks |
-
-## Supported Tools
-
-| Tool | Checked |
-|---|---|
-| Ollama | ✅ |
-| LM Studio | ✅ |
-| Open WebUI | ✅ |
-| text-generation-webui | ✅ |
-| ComfyUI | ✅ |
-| vLLM | ✅ |
-| LocalAI | ✅ |
-| KoboldCpp | ✅ |
-| Stable Diffusion WebUI | ✅ |
-| Whisper | ✅ |
 
 ## Example output
 
@@ -79,39 +53,38 @@ curl -fsSL iscooked.com/iscooked.com | sudo bash
 
 ## Scoring
 
-| Score | Level | Meaning |
-|---|---|---|
-| 0–14% | **Looking Fresh** | Your setup is locked down. |
-| 15–39% | **Slightly Warm** | A few things to tighten up. |
-| 40–69% | **Medium Rare** | Address those warnings. |
-| 70–100% | **Fully Cooked** | Fix the critical issues now. |
+Your **cooked score** ranges from 0–100%:
 
-## Cross-platform
+- **0–14%** — **Looking Fresh.** Your setup is locked down.
+- **15–39%** — **Slightly Warm.** A few things to tighten up.
+- **40–69%** — **Medium Rare.** Address those warnings.
+- **70–100%** — **Fully Cooked.** Fix the critical issues now.
 
-Works on **Linux** and **macOS** (bash 3.2+). Uses standard Unix tools (`ss`/`netstat`, `ps`, `stat`, `find`). Optional: `curl`, `docker`, `nvidia-smi` for deeper checks. Run with `sudo` for more thorough firewall and port checks.
+## Requirements
+
+- Bash 4+
+- Standard Unix tools (ss/netstat, ps, stat, find)
+- Optional: `curl` (for API auth checks), `docker` (for container checks), `nvidia-smi` (for GPU checks)
+- Run with `sudo` for more thorough firewall and port checks
 
 ## Privacy
 
-Runs **entirely on your machine**. Makes no network requests, sends no telemetry, and phones home to absolutely nobody.
+iscooked.com runs **entirely on your machine**. It makes no network requests, sends no telemetry, and phones home to absolutely nobody. The only network activity is checking if your local AI services are reachable on localhost.
 
 ## Contributing
 
 PRs welcome! Some ideas:
 
-- [ ] Add checks for more AI tools (TabbyAPI, etc.)
+- [ ] Add checks for more AI tools (KoboldCpp, TabbyAPI, Whisper, etc.)
 - [ ] JSON output mode for CI/CD integration
 - [ ] Auto-fix mode for common issues
-- [x] macOS-specific checks
+- [ ] macOS-specific checks
 - [ ] WSL-specific checks
 
 ## License
 
 MIT — do whatever you want with it.
 
-## See Also
-
-Running local LLMs? Find the best models for your hardware at [llmscout.fit](https://llmscout.fit).
-
 ---
 
-Built by a cybersecurity engineer who runs local LLMs. [GitHub](https://github.com/dinosoup1/iscooked) | [iscooked.com](https://iscooked.com)
+Built by a cybersecurity engineer who runs local LLMs. [iscooked.com](https://iscooked.com)

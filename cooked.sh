@@ -34,14 +34,6 @@ WARMING_COUNT=0
 SAFE_COUNT=0
 SCORE=0
 
-# ─── OS Detection ──────────────────────────────────────────────────────────────
-
-OS_TYPE="linux"
-case "$(uname -s)" in
-    Darwin*) OS_TYPE="macos" ;;
-    Linux*)  OS_TYPE="linux" ;;
-esac
-
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
 banner() {
@@ -64,20 +56,10 @@ BANNER
     echo -e "${DIM}──────────────────────────────────────────────────────────────${RESET}"
 }
 
-draw_line() {
-    local i=0
-    local line=""
-    while [ "$i" -lt 56 ]; do
-        line="${line}─"
-        i=$((i + 1))
-    done
-    echo "$line"
-}
-
 section() {
     echo ""
     echo -e "  ${MAGENTA}${BOLD}[$1]${RESET} ${WHITE}${BOLD}$2${RESET}"
-    echo -e "  ${DIM}$(draw_line)${RESET}"
+    echo -e "  ${DIM}$(printf '%.0s─' {1..56})${RESET}"
 }
 
 result_cooked() {
@@ -109,89 +91,61 @@ command_exists() {
     command -v "$1" &>/dev/null
 }
 
-# Portable stat: returns octal permission string (e.g. "755")
-get_file_perms() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        stat -f '%Lp' "$1" 2>/dev/null || echo "000"
-    else
-        stat -c '%a' "$1" 2>/dev/null || echo "000"
-    fi
-}
-
-# Portable stat: returns owner username
-get_file_owner() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        stat -f '%Su' "$1" 2>/dev/null || echo "unknown"
-    else
-        stat -c '%U' "$1" 2>/dev/null || echo "unknown"
-    fi
-}
-
-# Portable listening socket check: returns matching lines for a port
-get_listen_line() {
-    local port="$1"
-    if command_exists ss; then
-        ss -tlnp 2>/dev/null | grep ":${port} " || true
-    elif command_exists netstat; then
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            netstat -an -ptcp 2>/dev/null | grep LISTEN | grep "\.${port} " || true
-        else
-            netstat -tlnp 2>/dev/null | grep ":${port} " || true
-        fi
-    else
-        echo ""
-    fi
-}
-
-# Check if a listen line is bound to all interfaces
-is_bound_all_interfaces() {
-    local listen_line="$1"
-    local port="$2"
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        echo "$listen_line" | grep -qE '(\*|0\.0\.0\.0)\.'"${port}" && return 0
-        echo "$listen_line" | grep -qE '(::)\.'"${port}" && return 0
-        return 1
-    else
-        echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::):'"${port}" && return 0
-        return 1
-    fi
-}
-
 # ─── Checks ─────────────────────────────────────────────────────────────────────
 
 check_network_exposure() {
     section "01" "Network Exposure"
 
-    local ai_ports=""
-    ai_ports="11434:Ollama
-8080:LM Studio / text-gen-webui
-5000:text-gen-webui (alt)
-7860:Gradio / Stable Diffusion WebUI
-8188:ComfyUI
-3000:Open WebUI
-1234:LM Studio (alt)
-8000:vLLM / FastChat
-5001:LocalAI
-9090:Prometheus (AI metrics)"
+    local ai_ports=(
+        "11434:Ollama"
+        "8080:LM Studio / text-gen-webui"
+        "5000:text-gen-webui (alt)"
+        "7860:Gradio / Stable Diffusion WebUI"
+        "8188:ComfyUI"
+        "3000:Open WebUI"
+        "1234:LM Studio (alt)"
+        "8000:vLLM / FastChat"
+        "5001:LocalAI"
+        "9090:Prometheus (AI metrics)"
+    )
 
-    local found_any=false
-
-    while IFS= read -r entry; do
+    for entry in "${ai_ports[@]}"; do
         local port="${entry%%:*}"
         local name="${entry#*:}"
 
+        # Check if anything is listening on this port
         local listen_line=""
-        listen_line=$(get_listen_line "$port")
+        if command_exists ss; then
+            listen_line=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
+        elif command_exists netstat; then
+            listen_line=$(netstat -tlnp 2>/dev/null | grep ":${port} " || true)
+        fi
 
         if [[ -n "$listen_line" ]]; then
-            found_any=true
-            if is_bound_all_interfaces "$listen_line" "$port"; then
+            # Check if bound to 0.0.0.0 or :: (all interfaces)
+            if echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::):'"${port}"; then
                 result_cooked "${name} (port ${port}) is listening on ALL interfaces"
             else
                 result_safe "${name} (port ${port}) is bound to localhost only"
             fi
         fi
-    done <<< "$ai_ports"
+    done
+
+    # Check if any of the above were found at all
+    local found_any=false
+    for entry in "${ai_ports[@]}"; do
+        local port="${entry%%:*}"
+        local listen_line=""
+        if command_exists ss; then
+            listen_line=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
+        elif command_exists netstat; then
+            listen_line=$(netstat -tlnp 2>/dev/null | grep ":${port} " || true)
+        fi
+        if [[ -n "$listen_line" ]]; then
+            found_any=true
+            break
+        fi
+    done
 
     if [[ "$found_any" == "false" ]]; then
         result_safe "No common AI service ports detected as listening"
@@ -207,6 +161,7 @@ check_api_auth() {
         local ollama_resp
         ollama_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 http://127.0.0.1:11434/ 2>/dev/null) || ollama_resp="000"
         if [[ "$ollama_resp" == "200" ]]; then
+            # Check if OLLAMA_ORIGINS or any auth is set
             local ollama_env
             ollama_env=$(env | grep -i "OLLAMA" || true)
             if echo "$ollama_env" | grep -qi "OLLAMA_AUTH\|OLLAMA_API_KEY"; then
@@ -239,38 +194,23 @@ check_api_auth() {
 check_model_permissions() {
     section "03" "Model File Permissions"
 
+    local model_dirs=(
+        "$HOME/.ollama/models"
+        "$HOME/.cache/lm-studio/models"
+        "$HOME/.cache/huggingface/hub"
+        "$HOME/models"
+        "$HOME/.local/share/nomic.ai"
+        "/usr/share/ollama/.ollama/models"
+    )
+
     local found_models=false
 
-    # Build list of model dirs based on OS
-    local model_dirs_list=""
-    model_dirs_list="$HOME/.ollama/models
-$HOME/.cache/lm-studio/models
-$HOME/.cache/huggingface/hub
-$HOME/models
-$HOME/.local/share/nomic.ai
-/usr/share/ollama/.ollama/models"
-
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        model_dirs_list="$model_dirs_list
-$HOME/Library/Application Support/LM Studio/models
-$HOME/.lmstudio/models"
-        # Add Homebrew Ollama path if brew exists
-        if command_exists brew; then
-            local brew_prefix
-            brew_prefix=$(brew --prefix 2>/dev/null || echo "")
-            if [[ -n "$brew_prefix" ]]; then
-                model_dirs_list="$model_dirs_list
-${brew_prefix}/var/ollama/models"
-            fi
-        fi
-    fi
-
-    while IFS= read -r dir; do
+    for dir in "${model_dirs[@]}"; do
         if [[ -d "$dir" ]]; then
             found_models=true
             # Check if world-readable
             local world_readable
-            world_readable=$(find "$dir" -maxdepth 1 -perm -o+r 2>/dev/null | head -5 || true)
+            world_readable=$(find "$dir" -maxdepth 1 -perm -o+r 2>/dev/null | head -5)
             if [[ -n "$world_readable" ]]; then
                 result_warming "Model directory ${dir} is world-readable"
             else
@@ -279,12 +219,12 @@ ${brew_prefix}/var/ollama/models"
 
             # Check if world-writable
             local world_writable
-            world_writable=$(find "$dir" -maxdepth 2 -perm -o+w 2>/dev/null | head -5 || true)
+            world_writable=$(find "$dir" -maxdepth 2 -perm -o+w 2>/dev/null | head -5)
             if [[ -n "$world_writable" ]]; then
                 result_cooked "Files in ${dir} are world-writable!"
             fi
         fi
-    done <<< "$model_dirs_list"
+    done
 
     if [[ "$found_models" == "false" ]]; then
         result_skip "No common model directories found"
@@ -353,35 +293,19 @@ check_docker_risks() {
 check_gpu_exposure() {
     section "05" "GPU Driver Exposure"
 
-    local found_gpu=false
-
-    # NVIDIA (Linux)
+    # NVIDIA
     if command_exists nvidia-smi; then
-        found_gpu=true
-        # Check if nvidia management services have exposed ports
-        local nvidia_listen=""
-        nvidia_listen=$(get_listen_line "" 2>/dev/null || true)
-        # More targeted check: look for nvidia-related listeners
-        if command_exists ss; then
-            nvidia_listen=$(ss -tlnp 2>/dev/null | grep -i "nvidia\|nv-host" || true)
-        elif command_exists netstat; then
-            if [[ "$OS_TYPE" == "macos" ]]; then
-                nvidia_listen=$(netstat -an -ptcp 2>/dev/null | grep LISTEN | grep -i "nvidia\|nv-host" || true)
-            else
-                nvidia_listen=$(netstat -tlnp 2>/dev/null | grep -i "nvidia\|nv-host" || true)
-            fi
-        fi
-
-        if [[ -n "$nvidia_listen" ]]; then
+        # Check if nvidia-persistenced or nv-hostengine is exposed
+        if ss -tlnp 2>/dev/null | grep -q "nvidia\|nv-host"; then
             result_warming "NVIDIA management service has network-exposed ports"
         else
             result_safe "NVIDIA GPU detected, no management ports exposed"
         fi
 
-        # Check nvidia device permissions (Linux only)
-        if [[ "$OS_TYPE" == "linux" && -e /dev/nvidia0 ]]; then
+        # Check nvidia-smi device permissions
+        if [[ -e /dev/nvidia0 ]]; then
             local nv_perms
-            nv_perms=$(get_file_perms /dev/nvidia0)
+            nv_perms=$(stat -c '%a' /dev/nvidia0 2>/dev/null || echo "000")
             if [[ "${nv_perms: -1}" -ge 6 ]]; then
                 result_warming "/dev/nvidia0 is accessible to all users (mode ${nv_perms})"
             else
@@ -390,27 +314,16 @@ check_gpu_exposure() {
         fi
     fi
 
-    # AMD ROCm (Linux only)
-    if [[ "$OS_TYPE" == "linux" && -d /dev/dri ]]; then
-        found_gpu=true
-        if [[ -e /dev/dri/renderD128 ]]; then
-            local render_perms
-            render_perms=$(get_file_perms /dev/dri/renderD128)
-            if [[ "${render_perms: -1}" -ge 6 ]]; then
-                result_warming "/dev/dri/renderD128 is world-accessible (mode ${render_perms})"
-            fi
+    # AMD ROCm
+    if [[ -d /dev/dri ]]; then
+        local render_perms
+        render_perms=$(stat -c '%a' /dev/dri/renderD128 2>/dev/null || echo "000")
+        if [[ -e /dev/dri/renderD128 && "${render_perms: -1}" -ge 6 ]]; then
+            result_warming "/dev/dri/renderD128 is world-accessible (mode ${render_perms})"
         fi
     fi
 
-    # macOS GPU — Metal is sandboxed, but check for external GPU access
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if system_profiler SPDisplaysDataType 2>/dev/null | grep -qi "Metal\|GPU"; then
-            found_gpu=true
-            result_safe "macOS GPU uses Metal (sandboxed by default)"
-        fi
-    fi
-
-    if [[ "$found_gpu" == "false" ]]; then
+    if ! command_exists nvidia-smi && [[ ! -d /dev/dri ]]; then
         result_skip "No GPU devices detected"
     fi
 }
@@ -418,30 +331,31 @@ check_gpu_exposure() {
 check_telemetry() {
     section "06" "Telemetry / Phoning Home"
 
-    local telemetry_domains_list="telemetry.ollama.ai
-telemetry.vllm.ai
-sentry.io
-segment.io
-amplitude.com
-mixpanel.com
-analytics.google.com
-stats.lmstudio.ai"
+    local telemetry_domains=(
+        "telemetry.ollama.ai"
+        "telemetry.vllm.ai"
+        "sentry.io"
+        "segment.io"
+        "amplitude.com"
+        "mixpanel.com"
+        "analytics.google.com"
+        "stats.lmstudio.ai"
+    )
 
     # Check active connections
     local active_conns=""
     if command_exists ss; then
         active_conns=$(ss -tnp 2>/dev/null || true)
-    elif command_exists netstat; then
-        active_conns=$(netstat -tn 2>/dev/null || true)
     fi
 
+    # Check DNS cache / recent resolutions via /etc/hosts or connections
     local found_telemetry=false
-    while IFS= read -r domain; do
-        if echo "$active_conns" | grep -qi "$domain" 2>/dev/null; then
+    for domain in "${telemetry_domains[@]}"; do
+        if echo "$active_conns" | grep -qi "$domain"; then
             result_cooked "Active connection detected to ${domain}"
             found_telemetry=true
         fi
-    done <<< "$telemetry_domains_list"
+    done
 
     # Check if OLLAMA_NOPRUNE or telemetry opt-outs are set
     if [[ -n "${OLLAMA_NOPRUNE:-}" ]]; then
@@ -458,11 +372,11 @@ stats.lmstudio.ai"
     # Check /etc/hosts for blocked telemetry
     if [[ -f /etc/hosts ]]; then
         local blocked=0
-        while IFS= read -r domain; do
+        for domain in "${telemetry_domains[@]}"; do
             if grep -q "$domain" /etc/hosts 2>/dev/null; then
                 blocked=$((blocked + 1))
             fi
-        done <<< "$telemetry_domains_list"
+        done
         if [[ $blocked -gt 0 ]]; then
             result_safe "${blocked} telemetry domains blocked in /etc/hosts"
         fi
@@ -478,73 +392,49 @@ check_firewall() {
 
     local has_firewall=false
 
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        # macOS Application Firewall (socketfilterfw)
-        if command_exists /usr/libexec/ApplicationFirewall/socketfilterfw; then
-            local fw_status
-            fw_status=$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null || echo "disabled")
-            if echo "$fw_status" | grep -qi "enabled"; then
-                result_safe "macOS Application Firewall is enabled"
-                has_firewall=true
-            else
-                result_cooked "macOS Application Firewall is DISABLED"
-            fi
+    # UFW
+    if command_exists ufw; then
+        local ufw_status
+        ufw_status=$(ufw status 2>/dev/null || echo "inactive")
+        if echo "$ufw_status" | grep -qi "active"; then
+            result_safe "UFW firewall is active"
+            has_firewall=true
+        else
+            result_cooked "UFW is installed but INACTIVE"
         fi
+    fi
 
-        # macOS pf (packet filter)
-        if command_exists pfctl; then
-            local pf_status
-            pf_status=$(pfctl -s info 2>/dev/null || echo "disabled")
-            if echo "$pf_status" | grep -qi "Status: Enabled"; then
-                result_safe "macOS pf (packet filter) is enabled"
-                has_firewall=true
-            fi
+    # firewalld
+    if command_exists firewall-cmd; then
+        if firewall-cmd --state &>/dev/null; then
+            result_safe "firewalld is active"
+            has_firewall=true
+        else
+            result_cooked "firewalld is installed but INACTIVE"
         fi
-    else
-        # UFW
-        if command_exists ufw; then
-            local ufw_status
-            ufw_status=$(ufw status 2>/dev/null || echo "inactive")
-            if echo "$ufw_status" | grep -qi "active"; then
-                result_safe "UFW firewall is active"
-                has_firewall=true
-            else
-                result_cooked "UFW is installed but INACTIVE"
-            fi
-        fi
+    fi
 
-        # firewalld
-        if command_exists firewall-cmd; then
-            if firewall-cmd --state &>/dev/null; then
-                result_safe "firewalld is active"
-                has_firewall=true
-            else
-                result_cooked "firewalld is installed but INACTIVE"
-            fi
+    # iptables — check if any rules exist
+    if command_exists iptables; then
+        local rule_count
+        rule_count=$(iptables -L 2>/dev/null | grep -c -v -E "^Chain|^target|^$" || true)
+        rule_count=$((rule_count + 0))
+        if [[ "$rule_count" -gt 2 ]]; then
+            result_safe "iptables has ${rule_count} rules configured"
+            has_firewall=true
+        elif [[ "$has_firewall" == "false" ]]; then
+            result_warming "iptables has minimal/no rules"
         fi
+    fi
 
-        # iptables — check if any rules exist
-        if command_exists iptables; then
-            local rule_count
-            rule_count=$(iptables -L 2>/dev/null | grep -c -v -E "^Chain|^target|^$" || echo "0")
-            rule_count=$((rule_count + 0))
-            if [[ "$rule_count" -gt 2 ]]; then
-                result_safe "iptables has ${rule_count} rules configured"
-                has_firewall=true
-            elif [[ "$has_firewall" == "false" ]]; then
-                result_warming "iptables has minimal/no rules"
-            fi
-        fi
-
-        # nftables
-        if command_exists nft; then
-            local nft_rules
-            nft_rules=$(nft list ruleset 2>/dev/null | wc -l || echo "0")
-            nft_rules=$((nft_rules + 0))
-            if [[ "$nft_rules" -gt 5 ]]; then
-                result_safe "nftables has rules configured"
-                has_firewall=true
-            fi
+    # nftables
+    if command_exists nft; then
+        local nft_rules
+        nft_rules=$(nft list ruleset 2>/dev/null | wc -l || true)
+        nft_rules=$((nft_rules + 0))
+        if [[ "$nft_rules" -gt 5 ]]; then
+            result_safe "nftables has rules configured"
+            has_firewall=true
         fi
     fi
 
@@ -556,22 +446,20 @@ check_firewall() {
 check_ssl_tls() {
     section "08" "SSL/TLS Configuration"
 
-    local ports_list="11434
-8080
-5000
-7860
-8188
-3000
-1234
-8000"
+    local ai_ports=(11434 8080 5000 7860 8188 3000 1234 8000)
     local found_http=false
 
-    while IFS= read -r port; do
+    for port in "${ai_ports[@]}"; do
+        # Check if port is open and serving HTTP (not HTTPS)
         local listen_line=""
-        listen_line=$(get_listen_line "$port")
+        if command_exists ss; then
+            listen_line=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
+        fi
 
         if [[ -n "$listen_line" ]]; then
-            if is_bound_all_interfaces "$listen_line" "$port"; then
+            # Check if it's bound to non-localhost
+            if echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::):'"${port}"; then
+                # Try to detect if HTTPS
                 if command_exists curl; then
                     local https_check
                     https_check=$(curl -sk --connect-timeout 2 "https://127.0.0.1:${port}/" 2>&1 || echo "failed")
@@ -585,7 +473,7 @@ check_ssl_tls() {
                 fi
             fi
         fi
-    done <<< "$ports_list"
+    done
 
     if [[ "$found_http" == "false" ]]; then
         result_safe "No AI services exposed over plain HTTP on non-localhost"
@@ -622,32 +510,53 @@ check_sensitive_files() {
     section "10" "Sensitive File Exposure"
 
     # Check .env files in common locations
-    local search_dirs_list="$HOME
-$HOME/Projects
-$HOME/projects
-$HOME/code
-$HOME/dev
-/opt
-/srv"
+    local env_files=()
+    local search_dirs=(
+        "$HOME"
+        "$HOME/Projects"
+        "$HOME/projects"
+        "$HOME/code"
+        "$HOME/dev"
+        "/opt"
+        "/srv"
+    )
+
+    local seen_files=()
+    for dir in "${search_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            while IFS= read -r f; do
+                # Resolve to absolute path and deduplicate
+                local real_path
+                real_path=$(realpath "$f" 2>/dev/null || echo "$f")
+                local already_seen=false
+                for seen in "${seen_files[@]+"${seen_files[@]}"}"; do
+                    if [[ "$seen" == "$real_path" ]]; then
+                        already_seen=true
+                        break
+                    fi
+                done
+                if [[ "$already_seen" == "false" ]]; then
+                    seen_files+=("$real_path")
+                    env_files+=("$f")
+                fi
+            done < <(find "$dir" -maxdepth 3 \( -name ".env" -o -name ".env.local" -o -name "*.env" \) 2>/dev/null | head -20)
+        fi
+    done
 
     local found_exposed_env=false
-    while IFS= read -r dir; do
-        if [[ -d "$dir" ]]; then
-            while IFS= read -r env_file; do
-                [[ -z "$env_file" ]] && continue
-                if [[ -f "$env_file" ]]; then
-                    local perms
-                    perms=$(get_file_perms "$env_file")
-                    if [[ "${perms: -1}" -ge 4 ]]; then
-                        if grep -qiE '(api_key|api_secret|token|password|secret)=' "$env_file" 2>/dev/null; then
-                            result_cooked ".env file with API keys is world-readable: ${env_file} (mode ${perms})"
-                            found_exposed_env=true
-                        fi
-                    fi
+    for env_file in "${env_files[@]}"; do
+        if [[ -f "$env_file" ]]; then
+            local perms
+            perms=$(stat -c '%a' "$env_file" 2>/dev/null || echo "000")
+            if [[ "${perms: -1}" -ge 4 ]]; then
+                # Check if it contains API keys
+                if grep -qiE '(api_key|api_secret|token|password|secret)=' "$env_file" 2>/dev/null; then
+                    result_cooked ".env file with API keys is world-readable: ${env_file} (mode ${perms})"
+                    found_exposed_env=true
                 fi
-            done < <(find "$dir" -maxdepth 3 -name ".env" -o -name ".env.local" -o -name "*.env" 2>/dev/null | head -20 || true)
+            fi
         fi
-    done <<< "$search_dirs_list"
+    done
 
     if [[ "$found_exposed_env" == "false" ]]; then
         result_safe "No world-readable .env files with API keys found"
@@ -656,7 +565,7 @@ $HOME/dev
     # Check if models directory is owned properly
     if [[ -d "$HOME/.ollama" ]]; then
         local ollama_owner
-        ollama_owner=$(get_file_owner "$HOME/.ollama")
+        ollama_owner=$(stat -c '%U' "$HOME/.ollama" 2>/dev/null || echo "unknown")
         if [[ "$ollama_owner" != "$(whoami)" && "$ollama_owner" != "ollama" ]]; then
             result_warming "~/.ollama is owned by '${ollama_owner}' instead of you"
         fi
@@ -667,11 +576,13 @@ check_history_logs() {
     section "11" "History & Logs Leakage"
 
     # Check shell history for API keys
-    local history_files_list="$HOME/.bash_history
-$HOME/.zsh_history
-$HOME/.local/share/fish/fish_history"
+    local history_files=(
+        "$HOME/.bash_history"
+        "$HOME/.zsh_history"
+        "$HOME/.local/share/fish/fish_history"
+    )
 
-    while IFS= read -r hist_file; do
+    for hist_file in "${history_files[@]}"; do
         if [[ -f "$hist_file" ]]; then
             local key_leaks
             key_leaks=$(grep -ciE '(sk-[a-zA-Z0-9]{20,}|api_key=|OPENAI_API_KEY|ANTHROPIC_API_KEY|HF_TOKEN)' "$hist_file" 2>/dev/null || echo "0")
@@ -683,35 +594,31 @@ $HOME/.local/share/fish/fish_history"
 
             # Check permissions on history file
             local hist_perms
-            hist_perms=$(get_file_perms "$hist_file")
+            hist_perms=$(stat -c '%a' "$hist_file" 2>/dev/null || echo "000")
             if [[ "${hist_perms: -1}" -ge 4 ]]; then
                 result_warming "$(basename "$hist_file") is world-readable (mode ${hist_perms})"
             fi
         fi
-    done <<< "$history_files_list"
+    done
 
     # Check common AI log locations
-    local log_dirs_list="$HOME/.ollama/logs
-$HOME/.cache/lm-studio/logs
-/var/log/ollama"
+    local log_dirs=(
+        "$HOME/.ollama/logs"
+        "$HOME/.cache/lm-studio/logs"
+        "/var/log/ollama"
+    )
 
-    # Add macOS-specific log locations
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        log_dirs_list="$log_dirs_list
-$HOME/Library/Logs/LM Studio"
-    fi
-
-    while IFS= read -r log_dir; do
+    for log_dir in "${log_dirs[@]}"; do
         if [[ -d "$log_dir" ]]; then
             local log_perms
-            log_perms=$(get_file_perms "$log_dir")
+            log_perms=$(stat -c '%a' "$log_dir" 2>/dev/null || echo "000")
             if [[ "${log_perms: -1}" -ge 4 ]]; then
                 result_warming "AI log directory is world-readable: ${log_dir}"
             else
                 result_safe "AI log directory has restrictive permissions: ${log_dir}"
             fi
         fi
-    done <<< "$log_dirs_list"
+    done
 }
 
 check_ollama_config() {
@@ -744,29 +651,14 @@ check_ollama_config() {
         result_warming "OLLAMA_ORIGINS is set to: ${ollama_origins}"
     fi
 
-    # Check systemd service file (Linux only)
-    if [[ "$OS_TYPE" == "linux" && -f /etc/systemd/system/ollama.service ]]; then
+    # Check systemd service file if exists
+    if [[ -f /etc/systemd/system/ollama.service ]]; then
         local svc_user
         svc_user=$(grep -oP 'User=\K.*' /etc/systemd/system/ollama.service 2>/dev/null || echo "")
         if [[ "$svc_user" == "root" || -z "$svc_user" ]]; then
             result_warming "Ollama systemd service runs as root (or no User= set)"
         else
             result_safe "Ollama systemd service runs as '${svc_user}'"
-        fi
-    fi
-
-    # macOS: check Homebrew Ollama
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if command_exists brew; then
-            local brew_prefix
-            brew_prefix=$(brew --prefix 2>/dev/null || echo "")
-            if [[ -n "$brew_prefix" && -d "${brew_prefix}/opt/ollama" ]]; then
-                result_safe "Ollama installed via Homebrew at ${brew_prefix}/opt/ollama"
-            fi
-        fi
-        # Check launchctl for Ollama service
-        if launchctl list 2>/dev/null | grep -qi ollama; then
-            result_safe "Ollama is registered as a launchctl service"
         fi
     fi
 }
