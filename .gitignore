@@ -2,3 +2,9 @@
 node_modules/
 stats-wrangler.toml
 .DS_Store
+
+# Local-only blog — built and deployed via `wrangler pages deploy site`
+blog-src/
+site/blog/
+site/feed.xml
+site/assets/blog.css
