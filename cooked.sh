@@ -724,7 +724,7 @@ print_summary() {
 
     echo ""
     echo -e "  ${DIM}Run with sudo for more thorough checks (firewall, ports, etc.)${RESET}"
-    echo -e "  ${DIM}Report issues: https://github.com/dinosoup1/iscooked${RESET}"
+    echo -e "  ${DIM}Report issues: https://github.com/johnpippett/iscooked${RESET}"
     echo ""
 }
 
