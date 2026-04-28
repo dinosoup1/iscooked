@@ -131,12 +131,12 @@ get_file_owner() {
 get_listen_line() {
     local port="$1"
     if command_exists ss; then
-        ss -tlnp 2>/dev/null | grep ":${port} " || true
+        ss -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true
     elif command_exists netstat; then
         if [[ "$OS_TYPE" == "macos" ]]; then
-            netstat -an -ptcp 2>/dev/null | grep LISTEN | grep "\.${port} " || true
+            netstat -an -ptcp 2>/dev/null | grep LISTEN | grep -E "[:\.]${port}([[:space:]]|$)" || true
         else
-            netstat -tlnp 2>/dev/null | grep ":${port} " || true
+            netstat -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true
         fi
     else
         echo ""
@@ -270,7 +270,7 @@ ${brew_prefix}/var/ollama/models"
             found_models=true
             # Check if world-readable
             local world_readable
-            world_readable=$(find "$dir" -maxdepth 1 -perm -o+r 2>/dev/null | head -5 || true)
+            world_readable=$(find "$dir" -maxdepth 1 -type f -perm -o+r 2>/dev/null | head -5 || true)
             if [[ -n "$world_readable" ]]; then
                 result_warming "Model directory ${dir} is world-readable"
             else
@@ -363,12 +363,12 @@ check_gpu_exposure() {
         nvidia_listen=$(get_listen_line "" 2>/dev/null || true)
         # More targeted check: look for nvidia-related listeners
         if command_exists ss; then
-            nvidia_listen=$(ss -tlnp 2>/dev/null | grep -i "nvidia\|nv-host" || true)
+            nvidia_listen=$(ss -tlnp 2>/dev/null | grep -iE "nvidia|nv-host" | grep -vi "nvidia-settings" || true)
         elif command_exists netstat; then
             if [[ "$OS_TYPE" == "macos" ]]; then
-                nvidia_listen=$(netstat -an -ptcp 2>/dev/null | grep LISTEN | grep -i "nvidia\|nv-host" || true)
+                nvidia_listen=$(netstat -an -ptcp 2>/dev/null | grep LISTEN | grep -iE "nvidia|nv-host" | grep -vi "nvidia-settings" || true)
             else
-                nvidia_listen=$(netstat -tlnp 2>/dev/null | grep -i "nvidia\|nv-host" || true)
+                nvidia_listen=$(netstat -tlnp 2>/dev/null | grep -iE "nvidia|nv-host" | grep -vi "nvidia-settings" || true)
             fi
         fi
 
@@ -435,17 +435,9 @@ stats.lmstudio.ai"
         active_conns=$(netstat -tn 2>/dev/null || true)
     fi
 
-    local found_telemetry=false
-    while IFS= read -r domain; do
-        if echo "$active_conns" | grep -qi "$domain" 2>/dev/null; then
-            result_cooked "Active connection detected to ${domain}"
-            found_telemetry=true
-        fi
-    done <<< "$telemetry_domains_list"
-
-    # Check if OLLAMA_NOPRUNE or telemetry opt-outs are set
-    if [[ -n "${OLLAMA_NOPRUNE:-}" ]]; then
-        result_safe "OLLAMA_NOPRUNE is set"
+    # Check if OLLAMA_NO_CLOUD or telemetry opt-outs are set
+    if [[ -n "${OLLAMA_NO_CLOUD:-}" ]]; then
+        result_safe "OLLAMA_NO_CLOUD is set"
     fi
 
     local do_not_track="${DO_NOT_TRACK:-}"
@@ -459,7 +451,7 @@ stats.lmstudio.ai"
     if [[ -f /etc/hosts ]]; then
         local blocked=0
         while IFS= read -r domain; do
-            if grep -q "$domain" /etc/hosts 2>/dev/null; then
+            if grep -qE "^\\s*0\\.0\\.0\\.0\\s+${domain}$" /etc/hosts 2>/dev/null; then
                 blocked=$((blocked + 1))
             fi
         done <<< "$telemetry_domains_list"
@@ -468,9 +460,6 @@ stats.lmstudio.ai"
         fi
     fi
 
-    if [[ "$found_telemetry" == "false" ]]; then
-        result_safe "No active telemetry connections detected"
-    fi
 }
 
 check_firewall() {
@@ -573,9 +562,9 @@ check_ssl_tls() {
         if [[ -n "$listen_line" ]]; then
             if is_bound_all_interfaces "$listen_line" "$port"; then
                 if command_exists curl; then
-                    local https_check
-                    https_check=$(curl -sk --connect-timeout 2 "https://127.0.0.1:${port}/" 2>&1 || echo "failed")
-                    if echo "$https_check" | grep -qi "ssl\|tls\|certificate\|failed"; then
+                    local http_code
+                    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 "http://127.0.0.1:${port}/" 2>/dev/null || echo "000")
+                    if [[ "$http_code" != "000" && -n "$http_code" ]]; then
                         result_cooked "Port ${port} is exposed on all interfaces over plain HTTP"
                         found_http=true
                     fi
@@ -598,7 +587,8 @@ check_processes() {
     local ai_process_patterns="ollama|llama\.cpp|llama-server|text-generation|vllm|lmstudio|comfyui|stable-diffusion|koboldcpp|localai|whisper|faster-whisper|tabbyAPI"
 
     local ai_procs
-    ai_procs=$(ps aux 2>/dev/null | grep -iE "$ai_process_patterns" | grep -v grep || true)
+    local my_pid=$$
+    ai_procs=$(ps aux 2>/dev/null | grep -iE "$ai_process_patterns" | awk -v pid="$my_pid" '$2 != pid {print}' || true)
 
     if [[ -z "$ai_procs" ]]; then
         result_skip "No AI-related processes running"

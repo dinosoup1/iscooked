@@ -116,9 +116,9 @@ check_network_exposure() {
         # Check if anything is listening on this port
         local listen_line=""
         if command_exists ss; then
-            listen_line=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
+            listen_line=$(ss -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true)
         elif command_exists netstat; then
-            listen_line=$(netstat -tlnp 2>/dev/null | grep ":${port} " || true)
+            listen_line=$(netstat -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true)
         fi
 
         if [[ -n "$listen_line" ]]; then
@@ -137,9 +137,9 @@ check_network_exposure() {
         local port="${entry%%:*}"
         local listen_line=""
         if command_exists ss; then
-            listen_line=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
+            listen_line=$(ss -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true)
         elif command_exists netstat; then
-            listen_line=$(netstat -tlnp 2>/dev/null | grep ":${port} " || true)
+            listen_line=$(netstat -tlnp 2>/dev/null | grep -E "[:\.]${port}([[:space:]]|$)" || true)
         fi
         if [[ -n "$listen_line" ]]; then
             found_any=true
@@ -210,7 +210,7 @@ check_model_permissions() {
             found_models=true
             # Check if world-readable
             local world_readable
-            world_readable=$(find "$dir" -maxdepth 1 -perm -o+r 2>/dev/null | head -5)
+            world_readable=$(find "$dir" -maxdepth 1 -type f -perm -o+r 2>/dev/null | head -5)
             if [[ -n "$world_readable" ]]; then
                 result_warming "Model directory ${dir} is world-readable"
             else
@@ -296,7 +296,7 @@ check_gpu_exposure() {
     # NVIDIA
     if command_exists nvidia-smi; then
         # Check if nvidia-persistenced or nv-hostengine is exposed
-        if ss -tlnp 2>/dev/null | grep -q "nvidia\|nv-host"; then
+        if ss -tlnp 2>/dev/null | grep -iE "nvidia|nv-host" | grep -vi "nvidia-settings" | grep -q .; then
             result_warming "NVIDIA management service has network-exposed ports"
         else
             result_safe "NVIDIA GPU detected, no management ports exposed"
@@ -348,18 +348,9 @@ check_telemetry() {
         active_conns=$(ss -tnp 2>/dev/null || true)
     fi
 
-    # Check DNS cache / recent resolutions via /etc/hosts or connections
-    local found_telemetry=false
-    for domain in "${telemetry_domains[@]}"; do
-        if echo "$active_conns" | grep -qi "$domain"; then
-            result_cooked "Active connection detected to ${domain}"
-            found_telemetry=true
-        fi
-    done
-
-    # Check if OLLAMA_NOPRUNE or telemetry opt-outs are set
-    if [[ -n "${OLLAMA_NOPRUNE:-}" ]]; then
-        result_safe "OLLAMA_NOPRUNE is set"
+    # Check if OLLAMA_NO_CLOUD or telemetry opt-outs are set
+    if [[ -n "${OLLAMA_NO_CLOUD:-}" ]]; then
+        result_safe "OLLAMA_NO_CLOUD is set"
     fi
 
     local do_not_track="${DO_NOT_TRACK:-}"
@@ -373,7 +364,7 @@ check_telemetry() {
     if [[ -f /etc/hosts ]]; then
         local blocked=0
         for domain in "${telemetry_domains[@]}"; do
-            if grep -q "$domain" /etc/hosts 2>/dev/null; then
+            if grep -qE "^\\s*0\\.0\\.0\\.0\\s+${domain}$" /etc/hosts 2>/dev/null; then
                 blocked=$((blocked + 1))
             fi
         done
@@ -382,9 +373,6 @@ check_telemetry() {
         fi
     fi
 
-    if [[ "$found_telemetry" == "false" ]]; then
-        result_safe "No active telemetry connections detected"
-    fi
 }
 
 check_firewall() {
@@ -461,9 +449,9 @@ check_ssl_tls() {
             if echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::):'"${port}"; then
                 # Try to detect if HTTPS
                 if command_exists curl; then
-                    local https_check
-                    https_check=$(curl -sk --connect-timeout 2 "https://127.0.0.1:${port}/" 2>&1 || echo "failed")
-                    if echo "$https_check" | grep -qi "ssl\|tls\|certificate\|failed"; then
+                    local http_code
+                    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 "http://127.0.0.1:${port}/" 2>/dev/null || echo "000")
+                    if [[ "$http_code" != "000" && -n "$http_code" ]]; then
                         result_cooked "Port ${port} is exposed on all interfaces over plain HTTP"
                         found_http=true
                     fi
@@ -486,7 +474,8 @@ check_processes() {
     local ai_process_patterns="ollama|llama\.cpp|llama-server|text-generation|vllm|lmstudio|comfyui|stable-diffusion|koboldcpp|localai|whisper|faster-whisper|tabbyAPI"
 
     local ai_procs
-    ai_procs=$(ps aux 2>/dev/null | grep -iE "$ai_process_patterns" | grep -v grep || true)
+    local my_pid=$$
+    ai_procs=$(ps aux 2>/dev/null | grep -iE "$ai_process_patterns" | awk -v pid="$my_pid" '$2 != pid {print}' || true)
 
     if [[ -z "$ai_procs" ]]; then
         result_skip "No AI-related processes running"
