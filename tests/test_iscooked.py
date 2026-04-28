@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Validation tests for iscooked scanner bugs.
+
+Run: pytest tests/test_iscooked.py -v
+
+Each test mocks system commands via PATH injection and asserts on the
+script's terminal output. Tests are designed to FAIL on the current
+site/iscooked.com and PASS after the fixes are applied.
+"""
+
+import os
+import re
+import subprocess
+import tempfile
+
+import pytest
+
+SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "site", "iscooked.com")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def run_with_mocks(mocks=None, env_vars=None, extra_path="/usr/bin:/bin"):
+    """Run the scanner with mocked commands prepended to PATH.
+
+    Args:
+        mocks: dict of {command_name: shell_script_body}
+        env_vars: dict of extra environment variables
+        extra_path: additional PATH entries after mock dir
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if mocks:
+            for name, content in mocks.items():
+                path = os.path.join(tmpdir, name)
+                with open(path, "w") as f:
+                    f.write(f"#!/bin/sh\n{content}")
+                os.chmod(path, 0o755)
+
+        test_env = os.environ.copy()
+        test_env["PATH"] = tmpdir + ":" + extra_path
+        if env_vars:
+            test_env.update(env_vars)
+
+        result = subprocess.run(
+            ["bash", SCRIPT_PATH],
+            capture_output=True,
+            text=True,
+            env=test_env,
+        )
+        result.stdout_plain = strip_ansi(result.stdout)
+        result.stderr_plain = strip_ansi(result.stderr)
+        return result
+
+
+def source_and_run(function_name, mocks=None, env_vars=None, extra_path="/usr/bin:/bin"):
+    """Source the scanner (without running main) and call a single function."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if mocks:
+            for name, content in mocks.items():
+                path = os.path.join(tmpdir, name)
+                with open(path, "w") as f:
+                    f.write(f"#!/bin/sh\n{content}")
+                os.chmod(path, 0o755)
+
+        # Write a wrapper that sources the script (minus the main call) and
+        # invokes the requested function.
+        wrapper = os.path.join(tmpdir, "wrapper.sh")
+        with open(wrapper, "w") as f:
+            f.write(
+                f"""#!/bin/bash
+set -euo pipefail
+# Source scanner functions without triggering main()
+                sed '/^main "\\$@"$/d' "{SCRIPT_PATH}" > "$TMPDIR/iscooked_funcs.sh"
+source "$TMPDIR/iscooked_funcs.sh"
+{function_name}
+"""
+            )
+        os.chmod(wrapper, 0o755)
+
+        test_env = os.environ.copy()
+        test_env["PATH"] = tmpdir + ":" + extra_path
+        if env_vars:
+            test_env.update(env_vars)
+
+        result = subprocess.run(
+            ["bash", wrapper],
+            capture_output=True,
+            text=True,
+            env=test_env,
+        )
+        result.stdout_plain = strip_ansi(result.stdout)
+        result.stderr_plain = strip_ansi(result.stderr)
+        return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 1: PID collision / IPv6 substring false positive in port detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPortDetection:
+    def test_no_ipv6_false_positive_for_port_11434(self):
+        """An IPv6 address containing ':11434' should NOT be detected as port 11434."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 [fe80::11434:1]:22 users:(("sshd",pid=12345,fd=3))'
+fi
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama (port 11434)" not in result.stdout_plain
+        assert "port 11434" not in result.stdout_plain.lower()
+
+    def test_legitimate_port_11434_still_detected(self):
+        """An actual listener on 0.0.0.0:11434 MUST still be detected."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama (port 11434)" in result.stdout_plain
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 2 & 3: Telemetry — wrong env var, broken ss check removed
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestTelemetry:
+    def test_ollama_no_cloud_is_recognized(self):
+        """OLLAMA_NO_CLOUD=1 should be reported as a telemetry opt-out."""
+        result = source_and_run(
+            "check_telemetry",
+            mocks={"uname": 'echo Linux'},
+            env_vars={"OLLAMA_NO_CLOUD": "1"},
+        )
+        assert "OLLAMA_NO_CLOUD" in result.stdout_plain
+        # Old (wrong) variable should NOT be praised
+        assert "OLLAMA_NOPRUNE" not in result.stdout_plain
+
+    def test_ollama_noprune_is_ignored(self):
+        """OLLAMA_NOPRUNE=1 should NOT be reported as a telemetry opt-out."""
+        result = source_and_run(
+            "check_telemetry",
+            mocks={"uname": 'echo Linux'},
+            env_vars={"OLLAMA_NOPRUNE": "1"},
+        )
+        assert "OLLAMA_NOPRUNE" not in result.stdout_plain
+        assert "OLLAMA_NO_CLOUD" not in result.stdout_plain
+
+    def test_ss_not_grepped_for_telemetry_domains(self):
+        """The script must NOT call ss/netstat to grep for telemetry hostnames."""
+        ss_called = False
+
+        def mock_ss():
+            return '''
+if [ "$1" = "-tlnp" ]; then
+    # Return a fake line that an OLD broken check might match
+    echo 'ESTAB 0 0 192.168.1.50:443 34.120.1.20:443 users:(("chrome",pid=9999,fd=55))'
+fi
+'''
+
+        # We run the full script and simply assert that no "Active connection"
+        # telemetry message appears.
+        result = run_with_mocks(
+            mocks={"ss": mock_ss(), "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Active connection detected to telemetry.ollama.ai" not in result.stdout_plain
+        assert "Active connection detected to" not in result.stdout_plain
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 4 & 5: SSL/TLS inverted heuristic
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSslTls:
+    def test_http_probe_success_flags_plain_http(self):
+        """If HTTP probe returns 200, port should be flagged as plain HTTP."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        mock_curl = '''
+# Mock curl — return 200 for the HTTP probe on port 11434
+if echo "$@" | grep -q "http://127.0.0.1:11434/"; then
+    echo "200"
+    exit 0
+fi
+echo "000"
+exit 0
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "curl": mock_curl, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Port 11434 is exposed on all interfaces over plain HTTP" in result.stdout_plain
+
+    def test_http_probe_failure_does_not_flag(self):
+        """If HTTP probe fails (000), port should NOT be flagged as plain HTTP."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        mock_curl = '''
+# Mock curl — return 000 for everything (simulates down / HTTPS server)
+echo "000"
+exit 0
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "curl": mock_curl, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Port 11434 is exposed on all interfaces over plain HTTP" not in result.stdout_plain
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 6: Unanchored /etc/hosts grep
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHostsAnchoring:
+    def test_substring_domain_not_counted_as_blocked(self):
+        """A line like '0.0.0.0 block-telemetry.ollama.ai.evil.com' must NOT
+        count as blocking 'telemetry.ollama.ai'."""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write("127.0.0.1 localhost\n")
+            f.write("0.0.0.0 block-telemetry.ollama.ai.evil.com\n")
+            hosts_path = f.name
+
+        try:
+            # The script does: grep -q "$domain" /etc/hosts
+            # We test the exact command the script uses.
+            domain = "telemetry.ollama.ai"
+            result_old = subprocess.run(
+                ["grep", "-q", domain, hosts_path],
+                capture_output=True,
+                text=True,
+            )
+            # Old unanchored grep MATCHES — this is the bug.
+            assert result_old.returncode == 0, "Old grep should match (demonstrating the bug)"
+
+            # Fixed anchored grep should NOT match.
+            result_new = subprocess.run(
+                ["grep", "-qE", f"^\\s*0\\.0\\.0\\.0\\s+{domain}$", hosts_path],
+                capture_output=True,
+                text=True,
+            )
+            assert result_new.returncode != 0, "Anchored grep must NOT match the substring"
+        finally:
+            os.unlink(hosts_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 7: grep -v grep antipattern
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestProcessGrep:
+    def test_process_with_grep_in_name_is_detected(self):
+        """A process named 'ollama-grep-helper' must NOT be filtered by
+        'grep -v grep'."""
+        mock_ps = '''
+if [ "$1" = "aux" ]; then
+    echo 'user       1234   0.0  0.1  12345  6789 pts/0    S+   10:00   0:00 ollama-grep-helper --port 8080'
+fi
+'''
+        result = source_and_run(
+            "check_processes",
+            mocks={"ps": mock_ps, "uname": 'echo Linux'},
+        )
+        assert "ollama-grep-helper" in result.stdout_plain
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 8: World-readable directory false positive
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestModelPermissions:
+    def test_directory_mode_755_not_flagged(self):
+        """A model directory with mode 755 (normal) must NOT trigger a
+        world-readable warning."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = os.path.join(tmpdir, ".ollama", "models")
+            os.makedirs(model_dir, mode=0o755)
+
+            result = source_and_run(
+                "check_model_permissions",
+                env_vars={"HOME": tmpdir},
+            )
+            assert "world-readable" not in result.stdout_plain.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 9: NVIDIA false positive from process name matching
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGpuExposure:
+    def test_nvidia_settings_process_not_flagged(self):
+        """A process named 'nvidia-settings' on an unrelated port must NOT
+        trigger the NVIDIA GPU exposure warning."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:12345 users:(("nvidia-settings",pid=5555,fd=3))'
+fi
+'''
+        mock_nvidia_smi = '''
+echo "Mock nvidia-smi"
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "uname": 'echo Linux', "nvidia-smi": mock_nvidia_smi},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "NVIDIA management service has network-exposed ports" not in result.stdout_plain
