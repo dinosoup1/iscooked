@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+
 VERSION="1.0.0"
 
 # ─── Colors & Formatting ───────────────────────────────────────────────────────
@@ -821,7 +824,7 @@ print_summary() {
     fi
 
     echo ""
-    echo -e "  ${DIM}Run with sudo for more thorough checks (firewall, ports, etc.)${RESET}"
+    echo -e "  ${DIM}Elevated privileges can improve some firewall and port checks.${RESET}"
     echo -e "  ${DIM}Report issues: https://github.com/johnpippett/iscooked${RESET}"
     echo ""
 }

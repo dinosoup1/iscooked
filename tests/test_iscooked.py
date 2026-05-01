@@ -16,6 +16,51 @@ import tempfile
 import pytest
 
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "site", "iscooked.com")
+REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+
+def read_repo_file(*parts: str) -> str:
+    with open(os.path.join(REPO_ROOT, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security review: install snippets, PATH hardening, sudo wording
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestInstallSecurity:
+    def test_public_install_snippets_use_explicit_https(self):
+        """Published install commands must not rely on curl/wget URL guessing."""
+        readme = read_repo_file("README.md")
+        index = read_repo_file("site", "index.html")
+
+        public_docs = readme + "\n" + index
+        assert "curl -fsSL iscooked.com/iscooked.com | bash" not in public_docs
+        assert "curl -fsSL https://iscooked.com/iscooked.com | bash" in readme
+        assert "curl -fsSL https://iscooked.com/iscooked.com | bash" in index
+
+    def test_scanner_initializes_safe_fixed_path_near_top(self):
+        """The downloaded script should not inherit attacker-controlled PATH."""
+        script = read_repo_file("site", "iscooked.com")
+        first_lines = "\n".join(script.splitlines()[:12])
+
+        assert re.search(
+            r"^PATH=(['\"])?/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\1$",
+            first_lines,
+            re.MULTILINE,
+        )
+        assert re.search(r"^export PATH$", first_lines, re.MULTILINE)
+
+    def test_docs_and_script_avoid_blanket_sudo_recommendation(self):
+        """Docs/script should explain elevated privileges as optional improvement."""
+        readme = read_repo_file("README.md")
+        script = read_repo_file("site", "iscooked.com")
+
+        for content in (readme, script):
+            assert "Run with `sudo`" not in content
+            assert "Run with sudo" not in content
+            assert re.search(r"Elevated privileges (can )?improve some .*checks", content)
 
 
 def strip_ansi(text: str) -> str:
@@ -39,13 +84,27 @@ def run_with_mocks(mocks=None, env_vars=None, extra_path="/usr/bin:/bin"):
                     f.write(f"#!/bin/sh\n{content}")
                 os.chmod(path, 0o755)
 
+        wrapper = os.path.join(tmpdir, "wrapper.sh")
+        with open(wrapper, "w") as f:
+            f.write(
+                f"""#!/bin/bash
+set -euo pipefail
+# Source scanner functions without triggering main(), then restore mock PATH.
+sed '/^main "\\$@"$/d' "{SCRIPT_PATH}" > "$TMPDIR/iscooked_funcs.sh"
+source "$TMPDIR/iscooked_funcs.sh"
+export PATH="{tmpdir}:{extra_path}"
+main
+"""
+            )
+        os.chmod(wrapper, 0o755)
+
         test_env = os.environ.copy()
         test_env["PATH"] = tmpdir + ":" + extra_path
         if env_vars:
             test_env.update(env_vars)
 
         result = subprocess.run(
-            ["bash", SCRIPT_PATH],
+            ["bash", wrapper],
             capture_output=True,
             text=True,
             env=test_env,
@@ -65,8 +124,8 @@ def source_and_run(function_name, mocks=None, env_vars=None, extra_path="/usr/bi
                     f.write(f"#!/bin/sh\n{content}")
                 os.chmod(path, 0o755)
 
-        # Write a wrapper that sources the script (minus the main call) and
-        # invokes the requested function.
+        # Write a wrapper that sources the script (minus the main call), restores
+        # mock PATH after script PATH hardening, and invokes the requested function.
         wrapper = os.path.join(tmpdir, "wrapper.sh")
         with open(wrapper, "w") as f:
             f.write(
@@ -75,6 +134,7 @@ set -euo pipefail
 # Source scanner functions without triggering main()
                 sed '/^main "\\$@"$/d' "{SCRIPT_PATH}" > "$TMPDIR/iscooked_funcs.sh"
 source "$TMPDIR/iscooked_funcs.sh"
+export PATH="{tmpdir}:{extra_path}"
 {function_name}
 """
             )

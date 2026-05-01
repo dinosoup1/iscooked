@@ -3,7 +3,7 @@
 **Local AI security scanner.** One command to find out if your Ollama, LM Studio, or self-hosted LLM setup is leaking like a sieve.
 
 ```bash
-curl -fsSL iscooked.com/iscooked.com | bash
+curl -fsSL https://iscooked.com/iscooked.com | bash
 ```
 
 Or download and run manually:
@@ -65,7 +65,7 @@ Your **cooked score** ranges from 0–100%:
 - Bash 4+
 - Standard Unix tools (ss/netstat, ps, stat, find)
 - Optional: `curl` (for API auth checks), `docker` (for container checks), `nvidia-smi` (for GPU checks)
-- Run with `sudo` for more thorough firewall and port checks
+- Elevated privileges can improve some firewall and port checks
 
 ## Privacy
 

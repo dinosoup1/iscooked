@@ -233,7 +233,7 @@
 
             <div class="install-box" onclick="copyInstall()">
                 <span class="install-prefix">$</span>
-                <span class="install-cmd">curl -fsSL iscooked.com/iscooked.com | bash</span>
+                <span class="install-cmd">curl -fsSL https://iscooked.com/iscooked.com | bash</span>
                 <button class="install-copy" id="copyBtn">Copy</button>
             </div>
             <p class="install-note">Runs locally. Sends nothing anywhere. Ever.</p>
@@ -375,7 +375,7 @@
 
     <script>
         function copyInstall() {
-            navigator.clipboard.writeText('curl -fsSL iscooked.com/iscooked.com | bash').then(() => {
+            navigator.clipboard.writeText('curl -fsSL https://iscooked.com/iscooked.com | bash').then(() => {
                 const btn = document.getElementById('copyBtn');
                 btn.textContent = 'Copied!';
                 btn.style.color = 'var(--green)';
