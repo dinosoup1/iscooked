@@ -418,6 +418,42 @@ class TestModelPermissions:
             )
             assert "world-readable" not in result.stdout_plain.lower()
 
+    def test_nested_world_readable_model_file_is_flagged(self):
+        """World-readable model files nested below a model dir must be detected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nested_dir = os.path.join(tmpdir, ".ollama", "models", "blobs")
+            os.makedirs(nested_dir, mode=0o755)
+            model_file = os.path.join(nested_dir, "sha256-deadbeef")
+            with open(model_file, "w") as f:
+                f.write("mock model weights")
+            os.chmod(model_file, 0o644)
+
+            result = source_and_run(
+                "check_model_permissions",
+                env_vars={"HOME": tmpdir},
+            )
+            assert "world-readable" in result.stdout_plain.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding 4: untrusted output must not be interpreted as terminal controls
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestResultOutputSanitization:
+    @pytest.mark.parametrize("helper", ["result_cooked", "result_warming", "result_safe", "result_skip"])
+    def test_result_helpers_do_not_interpret_untrusted_escape_sequences(self, helper):
+        """Result helpers must not turn message text into terminal controls."""
+        result = source_and_run(
+            f"{helper} 'malicious\\033[2Jbell\\007done'",
+        )
+
+        assert result.returncode == 0
+        assert "malicious" in result.stdout
+        assert "done" in result.stdout
+        assert "\x1b[2J" not in result.stdout
+        assert "\x07" not in result.stdout
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bug 9: NVIDIA false positive from process name matching

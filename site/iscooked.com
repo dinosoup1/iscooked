@@ -87,29 +87,35 @@ result_cooked() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     COOKED_COUNT=$((COOKED_COUNT + 1))
     SCORE=$((SCORE + 10))
-    echo -e "  ${COOKED}  $1"
+    printf '%b  %s\n' "  ${COOKED}" "$(sanitize_result_message "$1")"
 }
 
 result_warming() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     WARMING_COUNT=$((WARMING_COUNT + 1))
     SCORE=$((SCORE + 4))
-    echo -e "  ${WARMING}  $1"
+    printf '%b  %s\n' "  ${WARMING}" "$(sanitize_result_message "$1")"
 }
 
 result_safe() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     SAFE_COUNT=$((SAFE_COUNT + 1))
-    echo -e "  ${SAFE}  $1"
+    printf '%b  %s\n' "  ${SAFE}" "$(sanitize_result_message "$1")"
 }
 
 result_skip() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
-    echo -e "  ${DIM}⏭  SKIP${RESET}  $1"
+    printf '%b  %s\n' "  ${DIM}⏭  SKIP${RESET}" "$(sanitize_result_message "$1")"
 }
 
 command_exists() {
     command -v "$1" &>/dev/null
+}
+
+sanitize_result_message() {
+    # Result messages can include untrusted command output. Keep terminal
+    # controls from being interpreted when printed.
+    printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177'
 }
 
 # Portable stat: returns octal permission string (e.g. "755")
@@ -267,7 +273,7 @@ ${brew_prefix}/var/ollama/models"
             found_models=true
             # Check if world-readable
             local world_readable
-            world_readable=$(find "$dir" -maxdepth 1 -type f -perm -o+r 2>/dev/null | head -5 || true)
+            world_readable=$(find "$dir" -type f -perm -o+r 2>/dev/null | head -5 || true)
             if [[ -n "$world_readable" ]]; then
                 result_warming "Model directory ${dir} is world-readable"
             else
