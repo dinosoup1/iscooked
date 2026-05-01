@@ -16,6 +16,51 @@ import tempfile
 import pytest
 
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "site", "iscooked.com")
+REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+
+def read_repo_file(*parts: str) -> str:
+    with open(os.path.join(REPO_ROOT, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security review: install snippets, PATH hardening, sudo wording
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestInstallSecurity:
+    def test_public_install_snippets_use_explicit_https(self):
+        """Published install commands must not rely on curl/wget URL guessing."""
+        readme = read_repo_file("README.md")
+        index = read_repo_file("site", "index.html")
+
+        public_docs = readme + "\n" + index
+        assert "curl -fsSL iscooked.com/iscooked.com | bash" not in public_docs
+        assert "curl -fsSL https://iscooked.com/iscooked.com | bash" in readme
+        assert "curl -fsSL https://iscooked.com/iscooked.com | bash" in index
+
+    def test_scanner_initializes_safe_fixed_path_near_top(self):
+        """The downloaded script should not inherit attacker-controlled PATH."""
+        script = read_repo_file("site", "iscooked.com")
+        first_lines = "\n".join(script.splitlines()[:12])
+
+        assert re.search(
+            r"^PATH=(['\"])?/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\1$",
+            first_lines,
+            re.MULTILINE,
+        )
+        assert re.search(r"^export PATH$", first_lines, re.MULTILINE)
+
+    def test_docs_and_script_avoid_blanket_sudo_recommendation(self):
+        """Docs/script should explain elevated privileges as optional improvement."""
+        readme = read_repo_file("README.md")
+        script = read_repo_file("site", "iscooked.com")
+
+        for content in (readme, script):
+            assert "Run with `sudo`" not in content
+            assert "Run with sudo" not in content
+            assert re.search(r"Elevated privileges (can )?improve some .*checks", content)
 
 
 def strip_ansi(text: str) -> str:
@@ -39,13 +84,27 @@ def run_with_mocks(mocks=None, env_vars=None, extra_path="/usr/bin:/bin"):
                     f.write(f"#!/bin/sh\n{content}")
                 os.chmod(path, 0o755)
 
+        wrapper = os.path.join(tmpdir, "wrapper.sh")
+        with open(wrapper, "w") as f:
+            f.write(
+                f"""#!/bin/bash
+set -euo pipefail
+# Source scanner functions without triggering main(), then restore mock PATH.
+sed '/^main "\\$@"$/d' "{SCRIPT_PATH}" > "$TMPDIR/iscooked_funcs.sh"
+source "$TMPDIR/iscooked_funcs.sh"
+export PATH="{tmpdir}:{extra_path}"
+main
+"""
+            )
+        os.chmod(wrapper, 0o755)
+
         test_env = os.environ.copy()
         test_env["PATH"] = tmpdir + ":" + extra_path
         if env_vars:
             test_env.update(env_vars)
 
         result = subprocess.run(
-            ["bash", SCRIPT_PATH],
+            ["bash", wrapper],
             capture_output=True,
             text=True,
             env=test_env,
@@ -65,8 +124,8 @@ def source_and_run(function_name, mocks=None, env_vars=None, extra_path="/usr/bi
                     f.write(f"#!/bin/sh\n{content}")
                 os.chmod(path, 0o755)
 
-        # Write a wrapper that sources the script (minus the main call) and
-        # invokes the requested function.
+        # Write a wrapper that sources the script (minus the main call), restores
+        # mock PATH after script PATH hardening, and invokes the requested function.
         wrapper = os.path.join(tmpdir, "wrapper.sh")
         with open(wrapper, "w") as f:
             f.write(
@@ -75,6 +134,7 @@ set -euo pipefail
 # Source scanner functions without triggering main()
                 sed '/^main "\\$@"$/d' "{SCRIPT_PATH}" > "$TMPDIR/iscooked_funcs.sh"
 source "$TMPDIR/iscooked_funcs.sh"
+export PATH="{tmpdir}:{extra_path}"
 {function_name}
 """
             )
@@ -128,6 +188,19 @@ fi
             extra_path="/usr/bin:/bin",
         )
         assert "Ollama (port 11434)" in result.stdout_plain
+
+    def test_bracketed_ipv6_any_address_is_all_interfaces(self):
+        """A bracketed IPv6 any-address listener [::]:11434 is exposed on all interfaces."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 [::]:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama (port 11434) is listening on ALL interfaces" in result.stdout_plain
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +298,48 @@ exit 0
         )
         assert "Port 11434 is exposed on all interfaces over plain HTTP" not in result.stdout_plain
 
+    def test_http_probe_uses_total_timeout(self):
+        """curl probes must include --max-time so slow responses cannot hang the scan."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        mock_curl = '''
+case " $* " in
+  *" --max-time "*) echo "200"; exit 0 ;;
+  *) echo "curl missing --max-time: $*" >&2; exit 64 ;;
+esac
+'''
+        result = source_and_run(
+            "check_ssl_tls",
+            mocks={"ss": mock_ss, "curl": mock_curl, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "curl missing --max-time" not in result.stderr_plain
+        assert "Port 11434 is exposed on all interfaces over plain HTTP" in result.stdout_plain
+
+
+class TestApiAuth:
+    def test_ollama_env_auth_alone_does_not_report_safe(self):
+        """Local OLLAMA_AUTH/API_KEY env vars do not prove the responding Ollama API enforces auth."""
+        mock_curl = '''
+if echo "$@" | grep -q "http://127.0.0.1:11434/"; then
+    echo "200"
+    exit 0
+fi
+echo "000"
+exit 0
+'''
+        result = source_and_run(
+            "check_api_auth",
+            mocks={"curl": mock_curl, "uname": 'echo Linux'},
+            env_vars={"OLLAMA_AUTH": "1", "OLLAMA_API_KEY": "local-only"},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama API is responding with auth configured" not in result.stdout_plain
+        assert "Ollama API is responding without authentication" in result.stdout_plain
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bug 6: Unanchored /etc/hosts grep
@@ -302,6 +417,42 @@ class TestModelPermissions:
                 env_vars={"HOME": tmpdir},
             )
             assert "world-readable" not in result.stdout_plain.lower()
+
+    def test_nested_world_readable_model_file_is_flagged(self):
+        """World-readable model files nested below a model dir must be detected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nested_dir = os.path.join(tmpdir, ".ollama", "models", "blobs")
+            os.makedirs(nested_dir, mode=0o755)
+            model_file = os.path.join(nested_dir, "sha256-deadbeef")
+            with open(model_file, "w") as f:
+                f.write("mock model weights")
+            os.chmod(model_file, 0o644)
+
+            result = source_and_run(
+                "check_model_permissions",
+                env_vars={"HOME": tmpdir},
+            )
+            assert "world-readable" in result.stdout_plain.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding 4: untrusted output must not be interpreted as terminal controls
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestResultOutputSanitization:
+    @pytest.mark.parametrize("helper", ["result_cooked", "result_warming", "result_safe", "result_skip"])
+    def test_result_helpers_do_not_interpret_untrusted_escape_sequences(self, helper):
+        """Result helpers must not turn message text into terminal controls."""
+        result = source_and_run(
+            f"{helper} 'malicious\\033[2Jbell\\007done'",
+        )
+
+        assert result.returncode == 0
+        assert "malicious" in result.stdout
+        assert "done" in result.stdout
+        assert "\x1b[2J" not in result.stdout
+        assert "\x07" not in result.stdout
 
 
 # ─────────────────────────────────────────────────────────────────────────────

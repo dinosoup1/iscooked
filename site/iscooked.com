@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+
 VERSION="1.0.0"
 
 # ─── Colors & Formatting ───────────────────────────────────────────────────────
@@ -84,29 +87,35 @@ result_cooked() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     COOKED_COUNT=$((COOKED_COUNT + 1))
     SCORE=$((SCORE + 10))
-    echo -e "  ${COOKED}  $1"
+    printf '%b  %s\n' "  ${COOKED}" "$(sanitize_result_message "$1")"
 }
 
 result_warming() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     WARMING_COUNT=$((WARMING_COUNT + 1))
     SCORE=$((SCORE + 4))
-    echo -e "  ${WARMING}  $1"
+    printf '%b  %s\n' "  ${WARMING}" "$(sanitize_result_message "$1")"
 }
 
 result_safe() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     SAFE_COUNT=$((SAFE_COUNT + 1))
-    echo -e "  ${SAFE}  $1"
+    printf '%b  %s\n' "  ${SAFE}" "$(sanitize_result_message "$1")"
 }
 
 result_skip() {
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
-    echo -e "  ${DIM}⏭  SKIP${RESET}  $1"
+    printf '%b  %s\n' "  ${DIM}⏭  SKIP${RESET}" "$(sanitize_result_message "$1")"
 }
 
 command_exists() {
     command -v "$1" &>/dev/null
+}
+
+sanitize_result_message() {
+    # Result messages can include untrusted command output. Keep terminal
+    # controls from being interpreted when printed.
+    printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177'
 }
 
 # Portable stat: returns octal permission string (e.g. "755")
@@ -152,7 +161,7 @@ is_bound_all_interfaces() {
         echo "$listen_line" | grep -qE '(::)\.'"${port}" && return 0
         return 1
     else
-        echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::):'"${port}" && return 0
+        echo "$listen_line" | grep -qE '(0\.0\.0\.0|\*|::|\[::\]):'"${port}" && return 0
         return 1
     fi
 }
@@ -205,29 +214,23 @@ check_api_auth() {
     if command_exists curl; then
         # Ollama
         local ollama_resp
-        ollama_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 http://127.0.0.1:11434/ 2>/dev/null) || ollama_resp="000"
+        ollama_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 http://127.0.0.1:11434/ 2>/dev/null) || ollama_resp="000"
         if [[ "$ollama_resp" == "200" ]]; then
-            local ollama_env
-            ollama_env=$(env | grep -i "OLLAMA" || true)
-            if echo "$ollama_env" | grep -qi "OLLAMA_AUTH\|OLLAMA_API_KEY"; then
-                result_safe "Ollama API is responding with auth configured"
-            else
-                result_warming "Ollama API is responding without authentication"
-            fi
+            result_warming "Ollama API is responding without authentication"
         elif [[ "$ollama_resp" != "000" ]]; then
             result_safe "Ollama API returned ${ollama_resp} (not open)"
         fi
 
         # LM Studio
         local lms_resp
-        lms_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 http://127.0.0.1:1234/v1/models 2>/dev/null) || lms_resp="000"
+        lms_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 http://127.0.0.1:1234/v1/models 2>/dev/null) || lms_resp="000"
         if [[ "$lms_resp" == "200" ]]; then
             result_warming "LM Studio API is responding without authentication"
         fi
 
         # Open WebUI
         local webui_resp
-        webui_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 http://127.0.0.1:3000/ 2>/dev/null) || webui_resp="000"
+        webui_resp=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 http://127.0.0.1:3000/ 2>/dev/null) || webui_resp="000"
         if [[ "$webui_resp" == "200" ]]; then
             result_warming "Open WebUI is accessible without checking for auth"
         fi
@@ -270,7 +273,7 @@ ${brew_prefix}/var/ollama/models"
             found_models=true
             # Check if world-readable
             local world_readable
-            world_readable=$(find "$dir" -maxdepth 1 -type f -perm -o+r 2>/dev/null | head -5 || true)
+            world_readable=$(find "$dir" -type f -perm -o+r 2>/dev/null | head -5 || true)
             if [[ -n "$world_readable" ]]; then
                 result_warming "Model directory ${dir} is world-readable"
             else
@@ -563,7 +566,7 @@ check_ssl_tls() {
             if is_bound_all_interfaces "$listen_line" "$port"; then
                 if command_exists curl; then
                     local http_code
-                    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 "http://127.0.0.1:${port}/" 2>/dev/null || echo "000")
+                    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/" 2>/dev/null || echo "000")
                     if [[ "$http_code" != "000" && -n "$http_code" ]]; then
                         result_cooked "Port ${port} is exposed on all interfaces over plain HTTP"
                         found_http=true
@@ -821,7 +824,7 @@ print_summary() {
     fi
 
     echo ""
-    echo -e "  ${DIM}Run with sudo for more thorough checks (firewall, ports, etc.)${RESET}"
+    echo -e "  ${DIM}Elevated privileges can improve some firewall and port checks.${RESET}"
     echo -e "  ${DIM}Report issues: https://github.com/johnpippett/iscooked${RESET}"
     echo ""
 }
