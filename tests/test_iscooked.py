@@ -189,6 +189,19 @@ fi
         )
         assert "Ollama (port 11434)" in result.stdout_plain
 
+    def test_bracketed_ipv6_any_address_is_all_interfaces(self):
+        """A bracketed IPv6 any-address listener [::]:11434 is exposed on all interfaces."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 [::]:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        result = run_with_mocks(
+            mocks={"ss": mock_ss, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama (port 11434) is listening on ALL interfaces" in result.stdout_plain
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bug 2 & 3: Telemetry — wrong env var, broken ss check removed
@@ -284,6 +297,48 @@ exit 0
             extra_path="/usr/bin:/bin",
         )
         assert "Port 11434 is exposed on all interfaces over plain HTTP" not in result.stdout_plain
+
+    def test_http_probe_uses_total_timeout(self):
+        """curl probes must include --max-time so slow responses cannot hang the scan."""
+        mock_ss = '''
+if [ "$1" = "-tlnp" ]; then
+    echo 'LISTEN 0 128 0.0.0.0:11434 users:(("ollama",pid=12345,fd=3))'
+fi
+'''
+        mock_curl = '''
+case " $* " in
+  *" --max-time "*) echo "200"; exit 0 ;;
+  *) echo "curl missing --max-time: $*" >&2; exit 64 ;;
+esac
+'''
+        result = source_and_run(
+            "check_ssl_tls",
+            mocks={"ss": mock_ss, "curl": mock_curl, "uname": 'echo Linux'},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "curl missing --max-time" not in result.stderr_plain
+        assert "Port 11434 is exposed on all interfaces over plain HTTP" in result.stdout_plain
+
+
+class TestApiAuth:
+    def test_ollama_env_auth_alone_does_not_report_safe(self):
+        """Local OLLAMA_AUTH/API_KEY env vars do not prove the responding Ollama API enforces auth."""
+        mock_curl = '''
+if echo "$@" | grep -q "http://127.0.0.1:11434/"; then
+    echo "200"
+    exit 0
+fi
+echo "000"
+exit 0
+'''
+        result = source_and_run(
+            "check_api_auth",
+            mocks={"curl": mock_curl, "uname": 'echo Linux'},
+            env_vars={"OLLAMA_AUTH": "1", "OLLAMA_API_KEY": "local-only"},
+            extra_path="/usr/bin:/bin",
+        )
+        assert "Ollama API is responding with auth configured" not in result.stdout_plain
+        assert "Ollama API is responding without authentication" in result.stdout_plain
 
 
 # ─────────────────────────────────────────────────────────────────────────────
